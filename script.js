@@ -14,6 +14,13 @@ const config = {
     smoothingFactor: 0.5,
 };
 
+const volumeControlConfig = {
+    enabled: true,
+    placement: 'top-left', // 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+    showSlider: false,
+    animate: true,
+};
+
 let canvas, ctx;
 let cols, rows, field;
 let time = 0, frameCount = 0, lastNoiseUpdate = 0;
@@ -21,6 +28,7 @@ let time = 0, frameCount = 0, lastNoiseUpdate = 0;
 const DISCORD_ID = '1412174644458557583';
 const LANYARD_WS = `wss://api.lanyard.rest/socket`;
 let discordStatus = 'offline';
+let lanyardData = null;
 
 const discordColors = {
     online: '#43b581',
@@ -89,6 +97,60 @@ function setAvatarBorder(status) {
     }
 }
 
+function updateDiscordStatusText() {
+    let statusEl = document.getElementById('discord-status-text');
+    if (!statusEl) {
+        statusEl = document.createElement('div');
+        statusEl.id = 'discord-status-text';
+        statusEl.className = 'discord-status';
+        const username = document.getElementById('username');
+        const badges = document.querySelector('.badges');
+        if (username && badges && username.parentElement) {
+            username.parentElement.appendChild(statusEl);
+            
+            requestAnimationFrame(() => {
+                const usernameRect = username.getBoundingClientRect();
+                const badgesRect = badges.getBoundingClientRect();
+                const midPoint = (usernameRect.bottom + badgesRect.top) / 2;
+                const cardRect = username.parentElement.getBoundingClientRect();
+                statusEl.style.top = `${midPoint - cardRect.top}px`;
+            });
+        }
+    }
+
+    if (!lanyardData) {
+        statusEl.textContent = '';
+        statusEl.style.display = 'none';
+        return;
+    }
+
+    const spotify = lanyardData.spotify;
+    if (spotify && spotify.song && spotify.artist) {
+        const artists = spotify.artist.includes(';') 
+            ? spotify.artist.split(';').map(artist => artist.trim()).join(' and ')
+            : spotify.artist;
+        
+        const fullText = `♫ Listening to ${spotify.song} by ${artists}`;
+        const lineBreak = fullText.length > 50 ? '<br>' : ' ';
+        
+        statusEl.innerHTML = `<span style="color: #1DB954;">♫</span> Listening to <strong>${spotify.song}</strong>${lineBreak}by <strong>${artists}</strong>`;
+        statusEl.style.display = 'block';
+        return;
+    }
+
+    const status = discordStatus || 'offline';
+    const statusLabels = {
+        online: 'Online',
+        idle: 'Idle',
+        dnd: 'DND',
+        offline: 'Offline'
+    };
+    const statusColor = discordColors[status] || discordColors['offline'];
+    const label = statusLabels[status] || 'Offline';
+    statusEl.innerHTML = `<span style="color: ${statusColor};">●</span> ${label}`;
+    statusEl.style.display = 'block';
+}
+
 function connectLanyard() {
     let ws = new WebSocket(LANYARD_WS);
     ws.addEventListener('open', () => {
@@ -103,7 +165,9 @@ function connectLanyard() {
         if (data.t === 'INIT_STATE' || data.t === 'PRESENCE_UPDATE') {
             let status = data.d.discord_status || 'offline';
             discordStatus = status;
+            lanyardData = data.d;
             setAvatarBorder(status);
+            updateDiscordStatusText();
         }
     });
     ws.addEventListener('close', () => {
@@ -360,6 +424,269 @@ function setupBoldTooltips() {
     document.head.appendChild(style);
 }
 
+function setupCardTilt() {
+    const card = document.querySelector('.profile-card');
+    if (!card) return;
+
+    card.addEventListener('mousemove', (e) => {
+        const rect = card.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        
+        const mouseX = e.clientX - centerX;
+        const mouseY = e.clientY - centerY;
+        
+        const rotateX = (mouseY / rect.height) * -20;
+        const rotateY = (mouseX / rect.width) * 20;
+        
+        card.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateZ(10px)`;
+    });
+
+    card.addEventListener('mouseleave', () => {
+        card.style.transform = 'rotateX(0deg) rotateY(0deg) translateZ(0px)';
+    });
+}
+
+let __vc = {
+    el: null,
+    btn: null,
+    slider: null,
+    lastNonZero: 67,
+};
+
+function renderVolumeSVG(level, muted) {
+    const waves = muted || level === 0 ? 0 : level >= 50 ? 3 : level >= 30 ? 2 : 1;
+    return `
+    <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" stroke="none" aria-hidden="true">
+        <path d="M3 9v6h4l5 5V4L7 9H3z" fill="#fff"></path>
+        ${waves >= 1 ? '<path d="M14.5 12a2.5 2.5 0 0 0-1.5-2.3V14.3a2.5 2.5 0 0 0 1.5-2.3z" fill="#fff"></path>' : ''}
+        ${waves >= 2 ? '<path d="M16 7.2a6 6 0 0 1 0 9.6V18a7.5 7.5 0 0 0 0-12v1.2z" fill="#fff"></path>' : ''}
+        ${waves >= 3 ? '<path d="M18 5a9 9 0 0 1 0 14v1.5a10.5 10.5 0 0 0 0-17V5z" fill="#fff"></path>' : ''}
+    </svg>`;
+}
+
+function getProfileCardWidth() {
+    const card = document.querySelector('.profile-card');
+    if (!card) return 360;
+    const rect = card.getBoundingClientRect();
+    return Math.round(card.offsetWidth || rect.width);
+}
+
+function positionVolumeCard() {
+    if (!__vc.el) return;
+    const p = volumeControlConfig.placement;
+
+    __vc.el.classList.remove('vc-top-right','vc-top-left','vc-bottom-right','vc-bottom-left');
+    __vc.el.style.position = 'fixed';
+    __vc.el.style.right = __vc.el.style.left = __vc.el.style.top = __vc.el.style.bottom = '';
+
+    if (!volumeControlConfig.showSlider) {
+        __vc.el.style.width = '56px';
+        __vc.el.style.height = '56px';
+        const margin = 24;
+        switch (p) {
+            case 'top-left':
+                __vc.el.style.top = margin + 'px';
+                __vc.el.style.left = margin + 'px';
+                break;
+            case 'top-right':
+                __vc.el.style.top = margin + 'px';
+                __vc.el.style.right = margin + 'px';
+                break;
+            case 'bottom-left':
+                __vc.el.style.bottom = margin + 'px';
+                __vc.el.style.left = margin + 'px';
+                break;
+            case 'bottom-right':
+            default:
+                __vc.el.style.bottom = margin + 'px';
+                __vc.el.style.right = margin + 'px';
+                break;
+        }
+    } else {
+        const w = getProfileCardWidth();
+        __vc.el.style.width = w + 'px';
+        const margin = 24;
+        switch (p) {
+            case 'top-left':
+                __vc.el.classList.add('vc-top-left');
+                __vc.el.style.top = margin + 'px';
+                __vc.el.style.left = margin + 'px';
+                break;
+            case 'top-right':
+                __vc.el.classList.add('vc-top-right');
+                __vc.el.style.top = margin + 'px';
+                __vc.el.style.right = margin + 'px';
+                break;
+            case 'bottom-left':
+                __vc.el.classList.add('vc-bottom-left');
+                __vc.el.style.bottom = margin + 'px';
+                __vc.el.style.left = margin + 'px';
+                break;
+            case 'bottom-right':
+            default:
+                __vc.el.classList.add('vc-bottom-right');
+                __vc.el.style.bottom = margin + 'px';
+                __vc.el.style.right = margin + 'px';
+                break;
+        }
+    }
+
+    if (__vc.el.parentElement !== document.body) {
+        document.body.appendChild(__vc.el);
+    }
+
+    const dirLeft = (p === 'top-right' || p === 'bottom-right');
+    __vc.el.classList.toggle('vc-dir-left', dirLeft);
+    __vc.el.classList.toggle('vc-dir-right', !dirLeft);
+}
+
+function updateVolumeIconUI() {
+    if (!__vc.btn) return;
+    const vol = Math.round((backgroundMusic?.volume ?? 0.67) * 100);
+    const isMuted = backgroundMusic?.muted || vol === 0;
+    __vc.btn.innerHTML = renderVolumeSVG(vol, !!isMuted);
+    __vc.btn.setAttribute('aria-pressed', isMuted ? 'true' : 'false');
+}
+
+function setupVolumeControl() {
+    if (!volumeControlConfig.enabled) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'vc-button';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Toggle mute');
+
+    let card, inner, sliderWrap, slider;
+
+    if (!volumeControlConfig.showSlider) {
+        btn.style.opacity = '0';
+        btn.style.pointerEvents = 'none';
+        btn.style.position = 'fixed';
+        btn.style.zIndex = '4000';
+        document.body.appendChild(btn);
+        __vc.el = btn;
+        __vc.btn = btn;
+        __vc.slider = null;
+    } else {
+        card = document.createElement('div');
+        card.className = 'volume-card';
+        inner = document.createElement('div');
+        inner.className = 'vc-inner';
+
+        sliderWrap = document.createElement('div');
+        sliderWrap.className = 'vc-slider-wrap';
+        slider = document.createElement('input');
+        slider.className = 'vc-slider';
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = '100';
+        slider.step = '1';
+
+        const initialVol = Math.round((backgroundMusic?.volume ?? 0.67) * 100);
+        slider.value = String(initialVol);
+        __vc.lastNonZero = initialVol > 0 ? initialVol : 67;
+
+        slider.style.setProperty('--value', slider.value + '%');
+
+        sliderWrap.appendChild(slider);
+        inner.appendChild(btn);
+        inner.appendChild(sliderWrap);
+        card.appendChild(inner);
+
+        card.classList.toggle('vc-animated', !!volumeControlConfig.animate);
+        card.style.opacity = '0';
+        card.style.pointerEvents = 'none';
+        document.body.appendChild(card);
+
+        __vc.el = card;
+        __vc.btn = btn;
+        __vc.slider = slider;
+    }
+
+    const initialVol = Math.round((backgroundMusic?.volume ?? 0.67) * 100);
+    __vc.lastNonZero = initialVol > 0 ? initialVol : 67;
+
+    btn.addEventListener('click', () => {
+        const audio = backgroundMusic;
+        if (!audio) return;
+        const volNow = Math.round(audio.volume * 100);
+        if (audio.muted || volNow === 0) {
+            const v = __vc.lastNonZero > 0 ? __vc.lastNonZero : 67;
+            audio.muted = false;
+            audio.volume = Math.min(1, Math.max(0, v / 100));
+            if (__vc.slider) {
+                __vc.slider.value = String(v);
+                __vc.slider.style.setProperty('--value', v + '%');
+            }
+        } else {
+            __vc.lastNonZero = volNow;
+            audio.volume = 0;
+            if (__vc.slider) {
+                __vc.slider.value = '0';
+                __vc.slider.style.setProperty('--value', '0%');
+            }
+        }
+        updateVolumeIconUI();
+    });
+
+    if (__vc.slider) {
+        const updateSliderFill = () => {
+            __vc.slider.style.setProperty('--value', __vc.slider.value + '%');
+        };
+
+        const onInput = () => {
+            const audio = backgroundMusic;
+            if (!audio) return;
+            const v = parseInt(slider.value || '0', 10);
+            audio.muted = false;
+            audio.volume = Math.min(1, Math.max(0, v / 100));
+            if (v > 0) __vc.lastNonZero = v;
+            updateSliderFill();
+            updateVolumeIconUI();
+        };
+        slider.addEventListener('input', onInput);
+        slider.addEventListener('change', onInput);
+    }
+
+    if (typeof backgroundMusic !== 'undefined' && backgroundMusic) {
+        backgroundMusic.addEventListener('volumechange', () => {
+            const v = Math.round(backgroundMusic.volume * 100);
+            if (__vc.slider && document.activeElement !== __vc.slider) {
+                __vc.slider.value = String(v);
+                __vc.slider.style.setProperty('--value', v + '%');
+            }
+            updateVolumeIconUI();
+        });
+    }
+
+    updateVolumeIconUI();
+    positionVolumeCard();
+}
+
+function setupCardTilt() {
+    const card = document.querySelector('.profile-card');
+    if (!card) return;
+
+    card.addEventListener('mousemove', (e) => {
+        const rect = card.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        
+        const mouseX = e.clientX - centerX;
+        const mouseY = e.clientY - centerY;
+        
+        const rotateX = (mouseY / rect.height) * -20;
+        const rotateY = (mouseX / rect.width) * 20;
+        
+        card.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateZ(10px)`;
+    });
+
+    card.addEventListener('mouseleave', () => {
+        card.style.transform = 'rotateX(0deg) rotateY(0deg) translateZ(0px)';
+    });
+}
+
 function removeSocialButtonOutlines() {
     const style = document.createElement('style');
     style.textContent = `
@@ -377,6 +704,12 @@ function removeSocialButtonOutlines() {
     }
     .social-link:not(:hover) svg, .social-link:not(:hover) img {
         box-shadow: none !important;
+    }
+    .social-link.litecoin img {
+        filter: drop-shadow(0 0 10px #fff) brightness(0) invert(1) !important;
+    }
+    .social-link.litecoin:hover img {
+        filter: drop-shadow(0 0 18px #fff) brightness(0) invert(1) !important;
     }
     `;
     document.head.appendChild(style);
@@ -398,6 +731,8 @@ document.addEventListener('DOMContentLoaded', () => {
     connectLanyard();
     setupBoldTooltips();
     removeSocialButtonOutlines();
+    setupCardTilt();
+    setupVolumeControl();
     setupMusicPlayer();
 });
 
@@ -478,4 +813,13 @@ overlay.addEventListener('click', () => {
     backgroundMusic.play().catch(err => {
         console.error('Music play failed:', err);
     });
+
+    if (__vc.el) {
+        __vc.el.style.opacity = '';
+        __vc.el.style.pointerEvents = '';
+    }
+});
+
+window.addEventListener('resize', () => {
+    window.requestAnimationFrame(positionVolumeCard);
 });
