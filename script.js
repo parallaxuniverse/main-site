@@ -17,7 +17,7 @@ const config = {
 const volumeControlConfig = {
     enabled: true,
     placement: 'top-left', // 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
-    showSlider: false,
+    showSlider: true,
     animate: true,
 };
 
