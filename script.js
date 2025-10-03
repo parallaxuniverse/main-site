@@ -376,7 +376,7 @@ function setupSocialLinks() {
     }
     const githubElem = document.querySelector('.social-link.github');
     if (githubElem) {
-        githubElem.href = 'https://github.com/paral-lax';
+        githubElem.href = 'https://github.com/parallaxuniverse/';
         githubElem.target = '_blank';
         githubElem.rel = 'noopener noreferrer';
         const githubSVG = githubElem.querySelector('svg');
